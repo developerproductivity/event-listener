@@ -7,7 +7,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	api "github.com/event-listener/api"
 	db "github.com/event-listener/database"
@@ -30,14 +29,14 @@ func eventReceiver(ctx context.Context, event cloudevents.Event) error {
 	if err := json.Unmarshal(event.DataEncoded, &dat); err != nil {
 		fmt.Println("Ignore")
 	}
-	var client *dynamodb.Client
+	var table *db.Table
 	var err error
 
-	if client, err = db.Newclient(); err != nil {
+	if table, err = db.Newclient("TektonCI"); err != nil {
 		log.Fatalf("failed to create dynamoclient: %s", err.Error())
 	}
 	fmt.Println("Pipleine run", dat.Pipelinerun)
-	db.InsertRecordInDatabase(dat.Pipelinerun, client)
+	table.InsertRecordInDatabase(dat.Pipelinerun)
 	return nil
 }
 
@@ -61,9 +60,9 @@ func main() {
 		log.Fatalf("failed to create client: %s", err.Error())
 	}
 
-	var client *dynamodb.Client
+	var table *db.Table
 
-	if client, err = db.Newclient(); err != nil {
+	if table, err = db.Newclient("TektonCI"); err != nil {
 		log.Fatalf("failed to create dynamoclient: %s", err.Error())
 	}
 
@@ -73,7 +72,7 @@ func main() {
 			select {
 			case <-t:
 				fmt.Println("Logilica Upload")
-				LogilicaUpload(client)
+				LogilicaUpload(table)
 			case <-ctx.Done():
 				return
 			}
@@ -88,7 +87,7 @@ func main() {
 	<-ctx.Done()
 }
 
-func LogilicaUpload(client *dynamodb.Client) {
-	payload := db.GetCiBuildPayload(client)
+func LogilicaUpload(table *db.Table) {
+	payload := db.GetCiBuildPayload(table.TableName, table.DynamoDbClient)
 	api.UploadPlanningData("872a7985dd8a58328dea96015b738c317039fb5a", payload)
 }

@@ -28,9 +28,14 @@ import (
 // Used to represent key value data such as keys, table items...
 type DynoNotation map[string]types.AttributeValue
 
+type Table struct {
+	DynamoDbClient *dynamodb.Client
+	TableName      string
+}
+
 // newclient constructs a new dynamodb client using a default configuration
 // and a provided profile name (created via aws configure cmd).
-func Newclient() (*dynamodb.Client, error) {
+func Newclient(tableName string) (*Table, error) {
 	region := os.Getenv("REGION")
 	url := os.Getenv("URL")
 	accsKeyID := os.Getenv("ACCESSKEYID")
@@ -54,35 +59,37 @@ func Newclient() (*dynamodb.Client, error) {
 	}
 
 	c := dynamodb.NewFromConfig(cfg)
-	return c, nil
+	table := Table{
+		DynamoDbClient: c,
+		TableName:      tableName,
+	}
+	return &table, nil
 }
 
 // createTable creates a table in the client's dynamodb instance
 // using the table parameters specified in input.
-func createTable(c *dynamodb.Client,
-	tableName string, input *dynamodb.CreateTableInput,
-) error {
+func (basics Table) CreateTable(input *dynamodb.CreateTableInput) (*types.TableDescription, error) {
 	var tableDesc *types.TableDescription
-	table, err := c.CreateTable(context.TODO(), input)
+	table, err := basics.DynamoDbClient.CreateTable(context.TODO(), input)
 	if err != nil {
-		log.Printf("Failed to create table `%v` with error: %v\n", tableName, err)
+		log.Printf("Failed to create table `%v` with error: %v\n", basics.TableName, err)
 	} else {
-		waiter := dynamodb.NewTableExistsWaiter(c)
+		waiter := dynamodb.NewTableExistsWaiter(basics.DynamoDbClient)
 		err = waiter.Wait(context.TODO(), &dynamodb.DescribeTableInput{
-			TableName: aws.String(tableName)}, 5*time.Minute)
+			TableName: aws.String(basics.TableName)}, 5*time.Minute)
 		if err != nil {
-			log.Printf("Failed to wait on create table `%v` with error: %v\n", tableName, err)
+			log.Printf("Failed to wait on create table `%v` with error: %v\n", basics.TableName, err)
 		}
 		tableDesc = table.TableDescription
 	}
-	fmt.Printf("Created table `%s` with details: %v\n\n", tableName, tableDesc)
+	fmt.Printf("Created table `%s` with details: %v\n\n", basics.TableName, tableDesc)
 
-	return err
+	return tableDesc, err
 }
 
 // listTables returns a list of table names in the client's dynamodb instance.
-func listTables(c *dynamodb.Client, input *dynamodb.ListTablesInput) ([]string, error) {
-	tables, err := c.ListTables(
+func (basics Table) ListTables() ([]string, error) {
+	tables, err := basics.DynamoDbClient.ListTables(
 		context.TODO(),
 		&dynamodb.ListTablesInput{},
 	)
@@ -94,9 +101,9 @@ func listTables(c *dynamodb.Client, input *dynamodb.ListTablesInput) ([]string, 
 }
 
 // putItem inserts an item (key + attributes) in to a dynamodb table.
-func putItem(c *dynamodb.Client, tableName string, item DynoNotation) (err error) {
-	_, err = c.PutItem(context.TODO(), &dynamodb.PutItemInput{
-		TableName: aws.String(tableName), Item: item,
+func (basics Table) putItem(item DynoNotation) (err error) {
+	_, err = basics.DynamoDbClient.PutItem(context.TODO(), &dynamodb.PutItemInput{
+		TableName: aws.String(basics.TableName), Item: item,
 	})
 	if err != nil {
 		return err
@@ -105,16 +112,16 @@ func putItem(c *dynamodb.Client, tableName string, item DynoNotation) (err error
 	return nil
 }
 
-func GetCiBuildPayload(client *dynamodb.Client) []eventType.CiBuildPayload {
+func GetCiBuildPayload(tableName string, client *dynamodb.Client) []eventType.CiBuildPayload {
 	var payload []eventType.CiBuildPayload
-	originAttr, _ := attributevalue.Marshal("Tekton")
+	originAttr, _ := attributevalue.Marshal(tableName)
 	keyExpr := expression.Key("origin").Equal(expression.Value(originAttr))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyExpr).Build()
 	if err != nil {
 		log.Fatal(err)
 	}
 	query, err := client.Query(context.TODO(), &dynamodb.QueryInput{
-		TableName:                 aws.String("TektonCI"),
+		TableName:                 aws.String(tableName),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		KeyConditionExpression:    expr.KeyCondition(),
@@ -130,15 +137,15 @@ func GetCiBuildPayload(client *dynamodb.Client) []eventType.CiBuildPayload {
 	return payload
 }
 
-func InsertRecordInDatabase(object v1.PipelineRun, client *dynamodb.Client) {
+func (basics Table) InsertRecordInDatabase(object v1.PipelineRun) error {
 
 	item := PrepareCiBuildData(object)
 	av, err := attributevalue.MarshalMap(item)
 	if err != nil {
 		fmt.Println("failed to marshal Record, %w", err)
-		return
+		return err
 	}
-	fmt.Println("Response from put api ", putItem(client, "TektonCI", av))
+	return basics.putItem(av)
 }
 
 func PrepareCiBuildData(obj v1.PipelineRun) eventType.CiBuildPayload {
@@ -223,4 +230,14 @@ func PrepareCiBuildData(obj v1.PipelineRun) eventType.CiBuildPayload {
 	stg = append(stg, stage)
 	payload.Stages = stg
 	return payload
+}
+
+// DeleteTable deletes the DynamoDB table and all of its data.
+func (basics Table) DeleteTable() error {
+	_, err := basics.DynamoDbClient.DeleteTable(context.TODO(), &dynamodb.DeleteTableInput{
+		TableName: aws.String(basics.TableName)})
+	if err != nil {
+		log.Printf("Couldn't delete table %v. Here's why: %v\n", basics.TableName, err)
+	}
+	return err
 }
