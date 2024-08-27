@@ -16,6 +16,7 @@ type CiBuildPayload struct {
 	PullRequestUrls []string    `json:"pullRequestUrls" dynamodbav:"pullrequestUrls,omitempty"`
 	IsDeployment    bool        `json:"isDeployment" dynamodbav:"isDeployment,omitempty"`
 	Stages          []Stage     `json:"stages" dynamodbav:"stages,omitempty"`
+	IsUploaded      string      `json:"isUploaded" dynamodbav:"IsUploaded,omitempty"`
 }
 
 type Job struct {

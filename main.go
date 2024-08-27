@@ -89,5 +89,7 @@ func main() {
 
 func LogilicaUpload(table *db.Table) {
 	payload := db.GetCiBuildPayload(table.TableName, table.DynamoDbClient)
-	api.UploadPlanningData("872a7985dd8a58328dea96015b738c317039fb5a", payload)
+	if err := api.UploadPlanningData("872a7985dd8a58328dea96015b738c317039fb5a", payload); err == nil {
+		db.UpdateRecords(payload, table.TableName, table.DynamoDbClient)
+	}
 }

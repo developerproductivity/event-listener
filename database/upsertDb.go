@@ -112,10 +112,59 @@ func (basics Table) putItem(item DynoNotation) (err error) {
 	return nil
 }
 
+func GetKey(tableName string, record eventType.CiBuildPayload) map[string]types.AttributeValue {
+	origin, err := attributevalue.Marshal(tableName)
+	if err != nil {
+		fmt.Println(err)
+	}
+	isUploaded, err := attributevalue.Marshal("false")
+	if err != nil {
+		fmt.Println(err)
+	}
+	originalId, err := attributevalue.Marshal(record.OriginalID)
+	if err != nil {
+		fmt.Println(err)
+	}
+	return map[string]types.AttributeValue{"origin": origin, "isUploaded": isUploaded, "originalId": originalId}
+}
+
+func UpdateRecords(records []eventType.CiBuildPayload, tableName string, client *dynamodb.Client) []error {
+	var response *dynamodb.UpdateItemOutput
+	var attributeMap map[string]map[string]interface{}
+	var errors []error
+	for _, record := range records {
+		update := expression.Set(expression.Name("isUploaded"), expression.Value("true"))
+		expr, err := expression.NewBuilder().WithUpdate(update).Build()
+		if err != nil {
+			log.Printf("Couldn't build expression for update. Here's why: %v\n", err)
+		} else {
+			response, err = client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+				TableName:                 aws.String(tableName),
+				Key:                       GetKey(tableName, record),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+				UpdateExpression:          expr.Update(),
+				ReturnValues:              types.ReturnValueUpdatedNew,
+			})
+			if err != nil {
+				log.Printf("Couldn't update record. Here's why: %v\n", err)
+				errors = append(errors, err)
+			} else {
+				err = attributevalue.UnmarshalMap(response.Attributes, &attributeMap)
+				if err != nil {
+					log.Printf("Couldn't unmarshall update response. Here's why: %v\n", err)
+					errors = append(errors, err)
+				}
+			}
+		}
+	}
+	return errors
+}
+
 func GetCiBuildPayload(tableName string, client *dynamodb.Client) []eventType.CiBuildPayload {
 	var payload []eventType.CiBuildPayload
-	originAttr, _ := attributevalue.Marshal(tableName)
-	keyExpr := expression.Key("origin").Equal(expression.Value(originAttr))
+	isUploadedAttr, _ := attributevalue.Marshal("false")
+	keyExpr := expression.Key("isUploaded").Equal(expression.Value(isUploadedAttr))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyExpr).Build()
 	if err != nil {
 		log.Fatal(err)
@@ -163,6 +212,7 @@ func PrepareCiBuildData(obj v1.PipelineRun) eventType.CiBuildPayload {
 		Commit:          "",
 		PullRequestUrls: make([]string, 0),
 		IsDeployment:    true,
+		IsUploaded:      "false",
 	}
 	triggeredBy := eventType.TriggeredBy{
 		Name:         "Pipelines Operator",
